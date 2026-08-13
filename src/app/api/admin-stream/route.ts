@@ -4,6 +4,12 @@ import { subscribePlatform, type LiveEvent } from "@/lib/realtime";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+/* Serverless hosts cut a function off after a fixed time; this stream wants to
+   stay open. 300s is the most Vercel Pro allows, and it is simply ignored on a
+   normal server, where the stream runs until the browser closes it. The client
+   reconnects on its own either way. */
+export const maxDuration = 300;
+
 /** The platform's own live feed: support questions from every restaurant. */
 export async function GET(request: Request) {
   await requireSuperAdmin();

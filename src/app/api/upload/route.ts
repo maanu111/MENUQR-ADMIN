@@ -17,6 +17,32 @@ const EXTENSION: Record<string, string> = {
    a caller can never write outside public/uploads. */
 const FOLDERS = new Set(["dishes", "logos", "payment", "proofs", "banners"]);
 
+/**
+ * Two places a file can go, chosen by where the app is running.
+ *
+ * A normal server (Hostinger, a VPS, this laptop) has a disk, so files go in
+ * public/uploads and are served straight from there. Serverless hosts give the
+ * app no writable disk at all, so when a blob token is present we hand the file
+ * to blob storage instead. Both return the same shape, so nothing that calls
+ * this route knows or cares which one ran.
+ */
+async function store(file: File, folder: string, name: string) {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    const { put } = await import("@vercel/blob");
+    const blob = await put(`${folder}/${name}`, file, {
+      access: "public",
+      addRandomSuffix: false,
+    });
+    return blob.url;
+  }
+
+  const dir = path.join(process.cwd(), "public", "uploads", folder);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, name), Buffer.from(await file.arrayBuffer()));
+  /* A path, never an absolute URL — moving hosts is then one SQL update. */
+  return `/uploads/${folder}/${name}`;
+}
+
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) {
@@ -47,18 +73,11 @@ export async function POST(request: Request) {
   }
 
   const name = `${randomUUID()}.${EXTENSION[file.type]}`;
-  const dir = path.join(process.cwd(), "public", "uploads", folder);
 
   try {
-    await mkdir(dir, { recursive: true });
-    await writeFile(
-      path.join(dir, name),
-      Buffer.from(await file.arrayBuffer()),
-    );
+    const url = await store(file, folder, name);
+    return NextResponse.json({ url }, { status: 201 });
   } catch {
     return NextResponse.json({ message: "Couldn't save that file." }, { status: 500 });
   }
-
-  /* A path, never an absolute URL — moving hosts is then one SQL update. */
-  return NextResponse.json({ url: `/uploads/${folder}/${name}` }, { status: 201 });
 }

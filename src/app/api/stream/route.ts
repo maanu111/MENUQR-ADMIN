@@ -5,6 +5,12 @@ export const dynamic = "force-dynamic";
 /* Long-lived connection: it must not run on the edge or be buffered. */
 export const runtime = "nodejs";
 
+/* Serverless hosts cut a function off after a fixed time; this stream wants to
+   stay open. 300s is the most Vercel Pro allows, and it is simply ignored on a
+   normal server, where the stream runs until the browser closes it. The client
+   reconnects on its own either way. */
+export const maxDuration = 300;
+
 /**
  * Server-sent events rather than websockets: this only ever pushes one way,
  * SSE reconnects on its own, and it needs no second process or custom server
