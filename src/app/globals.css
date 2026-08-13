@@ -1,26 +1,338 @@
 @import "tailwindcss";
 
+/* ------------------------------------------------------------------
+   Palette — pure white ground, one signal blue (#0284C7).
+   Neutrals carry a slight blue bias so greys sit with the accent
+   instead of fighting it. Dark is a designed counterpart, not an
+   inversion: the accent lifts, the ground stays warm-neutral.
+   ------------------------------------------------------------------ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ground: #ffffff;
+  --surface: #f8fafc;
+  --surface-2: #f1f5f9;
+  --ink: #0b1220;
+  --ink-2: #475569;
+  --ink-3: #94a3b8;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+
+  --brand: #0284c7;
+  --brand-deep: #0369a1;
+  --brand-bright: #38bdf8;
+  --brand-wash: #f0f9ff;
+  --brand-ink: #ffffff;
+
+  --good: #059669;
+  --warn: #d97706;
+  --bad: #dc2626;
+
+  --shadow-sm: 0 1px 2px rgb(11 18 32 / 0.04);
+  --shadow: 0 1px 2px rgb(11 18 32 / 0.03), 0 8px 20px -14px rgb(11 18 32 / 0.12);
+  --shadow-lift: 0 1px 3px rgb(11 18 32 / 0.04), 0 18px 40px -22px rgb(11 18 32 / 0.18);
+
+  color-scheme: light;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
+/* Dark tokens live in one mixin-ish block, applied by both selectors below. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    --ground: #0b1017;
+    --surface: #111823;
+    --surface-2: #18212e;
+    --ink: #e8eef6;
+    --ink-2: #9fb0c4;
+    --ink-3: #6b7d92;
+    --line: #1e2836;
+    --line-strong: #2c3a4c;
+
+    --brand: #38bdf8;
+    --brand-deep: #0ea5e9;
+    --brand-bright: #7dd3fc;
+    --brand-wash: #0d2233;
+    --brand-ink: #04121c;
+
+    --good: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 8px 20px -14px rgb(0 0 0 / 0.7);
+    --shadow-lift: 0 1px 3px rgb(0 0 0 / 0.4), 0 18px 40px -22px rgb(0 0 0 / 0.8);
+
+    color-scheme: dark;
   }
 }
 
+:root[data-theme="dark"] {
+  --ground: #0b1017;
+  --surface: #111823;
+  --surface-2: #18212e;
+  --ink: #e8eef6;
+  --ink-2: #9fb0c4;
+  --ink-3: #6b7d92;
+  --line: #1e2836;
+  --line-strong: #2c3a4c;
+
+  --brand: #38bdf8;
+  --brand-deep: #0ea5e9;
+  --brand-bright: #7dd3fc;
+  --brand-wash: #0d2233;
+  --brand-ink: #04121c;
+
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #f87171;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 8px 20px -14px rgb(0 0 0 / 0.7);
+  --shadow-lift: 0 1px 3px rgb(0 0 0 / 0.4), 0 18px 40px -22px rgb(0 0 0 / 0.8);
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-brand: var(--brand);
+  --color-brand-deep: var(--brand-deep);
+  --color-brand-bright: var(--brand-bright);
+  --color-brand-wash: var(--brand-wash);
+  --color-brand-ink: var(--brand-ink);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-instrument), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+}
+
+* {
+  min-width: 0;
+}
+
+/* The class is added for the length of a switch and then removed, so page
+   load and scrolling never pay for a transition nobody asked for. */
+.theme-switching,
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition:
+    background-color 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    fill 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 220ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition-delay: 0ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-switching,
+  .theme-switching *,
+  .theme-switching *::before,
+  .theme-switching *::after {
+    transition: none !important;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--brand);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* Display type is set tight and optically balanced. */
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.028em;
+  line-height: 1.06;
+  text-wrap: balance;
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* One measure for the whole page — nothing sets its own width.
+   Registered as a Tailwind utility so it lands in the utilities layer and
+   can be overridden per-element in the normal way. */
+@utility shell {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 58rem;
+  padding-inline: 1.25rem;
+
+  @media (width >= 40rem) {
+    padding-inline: 2rem;
+  }
+}
+
+/* Caps the reading measure so body copy never runs the full container. */
+@utility measure {
+  max-width: 54ch;
+}
+
+/* Makes a whole table row open its detail page while keeping one real link
+   for the keyboard and for screen readers. Put `row` on the <tr> and
+   `row-link` on the anchor inside it: the anchor's ::after stretches over the
+   row, so a click anywhere lands on it. Buttons inside the row still work —
+   they sit above the overlay on their own stacking context. */
+@utility row {
+  position: relative;
+}
+
+@utility row-link {
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+}
+
+.no-bar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-bar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ---------------------------- Skeletons ---------------------------- */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(11 18 32 / 0.06) 50%,
+    transparent 100%
+  );
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ------------------------------ Motion ------------------------------ */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes sweep {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes tick-up {
+  from {
+    transform: translateY(0.4em);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.anim-rise {
+  animation: rise-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* The QR scan line — the one moment of motion that is literally the product. */
+.anim-sweep {
+  animation: sweep 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.anim-tick {
+  animation: tick-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .skeleton::after {
+    animation: none;
+  }
 }

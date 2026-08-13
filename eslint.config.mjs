@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Prisma emits this from schema.prisma; it is not ours to lint.
+    "src/generated/**",
   ]),
 ]);
 

@@ -1,0 +1,566 @@
+// Multi-tenant from the first migration: every business row carries a
+// restaurantId, and every query is expected to scope by it. Retrofitting this
+// later would mean rewriting every query in the app.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- Platform
+
+model Plan {
+  id            String   @id @default(cuid())
+  tier          String   @unique
+  name          String
+  /// Stored in paise so money never touches a float.
+  pricePaise    Int
+  maxOutlets    Int
+  maxTables     Int
+  /// Feature keys this plan unlocks, e.g. ["pos","inventory"].
+  features      Json
+  isActive      Boolean  @default(true)
+  /// Hidden from the pricing page and from new signups.
+  isArchived    Boolean  @default(false)
+  blurb         String?
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+}
+
+model Subscription {
+  id           String             @id @default(cuid())
+  restaurantId String             @unique
+  planId       String
+  status       SubscriptionStatus @default(TRIALING)
+  trialEndsAt  DateTime?
+  renewsAt     DateTime?
+  cancelledAt  DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  plan         Plan       @relation(fields: [planId], references: [id])
+  invoices     Invoice[]
+
+  @@index([planId])
+  @@index([status])
+}
+
+enum InvoiceStatus {
+  DUE
+  /// Restaurant says they paid and attached a screenshot; awaiting review.
+  SUBMITTED
+  PAID
+  REJECTED
+  VOID
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  subscriptionId String
+  number         String        @unique
+  amountPaise    Int
+  status         InvoiceStatus @default(DUE)
+  issuedAt       DateTime      @default(now())
+  paidAt         DateTime?
+  dueAt          DateTime?
+
+  /// Proof the restaurant uploads after paying by UPI.
+  proofUrl       String?
+  paymentRef     String?
+  payerNote      String?       @db.Text
+  submittedAt    DateTime?
+  /// Set by the super admin once the screenshot has been checked.
+  verifiedAt     DateTime?
+  verifiedById   String?
+  rejectedReason String?
+
+  subscription   Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([status])
+}
+
+/// Per-tenant override of a plan feature — the super admin's kill switch.
+model FeatureFlag {
+  id           String   @id @default(cuid())
+  restaurantId String
+  key          String
+  enabled      Boolean  @default(true)
+  updatedAt    DateTime @updatedAt
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, key])
+}
+
+// -------------------------------------------------------------- Tenancy
+
+model Restaurant {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  name         String
+  tagline      String?
+  logoUrl      String?
+  /// Drives the guest menu's accent. Hex, validated before it is stored.
+  brandColor   String   @default("#C8102E")
+  /// "light" | "dark" — what the guest sees before any choice of their own.
+  menuTheme    String   @default("light")
+  /// Optional line under the restaurant name on the guest menu.
+  menuNote     String?
+  fssai        String?
+  gstPercent   Int      @default(5)
+  currency     String   @default("INR")
+  serviceHours String?
+  isOpen       Boolean  @default(true)
+  /// Whether guests may order for delivery as well as at a table. The
+  /// restaurant delivers its own orders — the platform never handles them.
+  acceptsDelivery Boolean @default(false)
+  /// The restaurant's own delivery terms: area, charge, rough timing. Shown
+  /// to the guest before they commit, because these are the restaurant's
+  /// promises to keep, not the platform's.
+  deliveryNote    String? @db.VarChar(300)
+  /// Smallest order the kitchen will send out, in paise. 0 means no minimum.
+  deliveryMinPaise Int    @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships  Membership[]
+  tables       RestaurantTable[]
+  categories   Category[]
+  menuItems    MenuItem[]
+  orders       Order[]
+  offers       Offer[]
+  banners      Banner[]
+  inventory    InventoryItem[]
+  scans        QrScan[]
+  subscription Subscription?
+  featureFlags FeatureFlag[]
+  tickets      SupportTicket[]
+  waiterCalls  WaiterCall[]
+
+  @@index([slug])
+}
+
+// ---------------------------------------------------------------- People
+
+enum PlatformRole {
+  SUPER_ADMIN
+  RESTAURANT_USER
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  phone        String?      @unique
+  name         String
+  passwordHash String
+  platformRole PlatformRole @default(RESTAURANT_USER)
+  isActive     Boolean      @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  memberships     Membership[]
+  placedOrders    Order[]          @relation("OrderTakenBy")
+  ticketsOpened   SupportTicket[]  @relation("TicketOpenedBy")
+  ticketMessages  SupportMessage[] @relation("MessageAuthor")
+  callsAttended   WaiterCall[]     @relation("CallAttendedBy")
+
+  @@index([platformRole])
+}
+
+enum StaffRole {
+  OWNER
+  MANAGER
+  WAITER
+  KITCHEN
+}
+
+/// A user's seat at one restaurant. A person can hold seats at several.
+model Membership {
+  id           String    @id @default(cuid())
+  userId       String
+  restaurantId String
+  role         StaffRole
+  /// Explicit page keys this person may open. Null means "use the role's
+  /// default set" — an empty array means the owner deliberately gave none.
+  pages        Json?
+  isActive     Boolean   @default(true)
+  invitedAt    DateTime  @default(now())
+  acceptedAt   DateTime?
+
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, restaurantId])
+  @@index([restaurantId, role])
+}
+
+// ------------------------------------------------------------------ Menu
+
+model Category {
+  id           String  @id @default(cuid())
+  restaurantId String
+  name         String
+  sortOrder    Int     @default(0)
+  isActive     Boolean @default(true)
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  items        MenuItem[]
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId, sortOrder])
+}
+
+enum DietType {
+  VEG
+  NONVEG
+  EGG
+}
+
+model MenuItem {
+  id           String   @id @default(cuid())
+  restaurantId String
+  categoryId   String
+  /// Kitchen-facing short code, unique inside a restaurant.
+  code         String
+  name         String
+  description  String?  @db.Text
+  pricePaise   Int
+  /// What it costs to make — drives the margin reports.
+  costPaise    Int      @default(0)
+  diet         DietType @default(VEG)
+  imageUrl     String?
+  prepMinutes  Int      @default(15)
+  spiceLevel   Int      @default(0)
+  isAvailable  Boolean  @default(true)
+  isBestseller Boolean  @default(false)
+  /// Eligible to appear in the post-order add-on rail.
+  isAddOn      Boolean  @default(false)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  category     Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  optionGroups OptionGroup[]
+  orderItems   OrderItem[]
+
+  @@unique([restaurantId, code])
+  @@index([restaurantId, categoryId])
+  @@index([restaurantId, isAvailable])
+}
+
+model OptionGroup {
+  id         String  @id @default(cuid())
+  menuItemId String
+  name       String
+  isRequired Boolean @default(true)
+  minSelect  Int     @default(1)
+  maxSelect  Int     @default(1)
+  sortOrder  Int     @default(0)
+
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  choices    OptionChoice[]
+
+  @@index([menuItemId])
+}
+
+model OptionChoice {
+  id             String @id @default(cuid())
+  optionGroupId  String
+  label          String
+  priceDeltaPaise Int   @default(0)
+  sortOrder      Int    @default(0)
+
+  optionGroup    OptionGroup @relation(fields: [optionGroupId], references: [id], onDelete: Cascade)
+
+  @@index([optionGroupId])
+}
+
+// ---------------------------------------------------------------- Tables
+
+model RestaurantTable {
+  id           String  @id @default(cuid())
+  restaurantId String
+  number       String
+  seats        Int     @default(4)
+  section      String?
+  /// Random token printed into the QR — never a guessable row id.
+  qrToken      String  @unique
+  isActive     Boolean @default(true)
+  createdAt    DateTime @default(now())
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  orders       Order[]
+  scans        QrScan[]
+  waiterCalls  WaiterCall[]
+
+  @@unique([restaurantId, number])
+  @@index([restaurantId])
+}
+
+/// One row per QR open — powers scan counts and peak-hour reporting.
+model QrScan {
+  id           String   @id @default(cuid())
+  restaurantId String
+  tableId      String
+  sessionId    String
+  scannedAt    DateTime @default(now())
+
+  restaurant   Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  table        RestaurantTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, scannedAt])
+  @@index([tableId, scannedAt])
+}
+
+// --------------------------------------------------------------- Orders
+
+enum OrderChannel {
+  QR
+  POS
+  PHONE
+  /// Ordered from the menu for delivery. The restaurant delivers it itself.
+  DELIVERY
+}
+
+enum OrderStage {
+  PLACED
+  ACCEPTED
+  PREPARING
+  READY
+  SERVED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  REFUNDED
+}
+
+model Order {
+  id            String        @id @default(cuid())
+  restaurantId  String
+  tableId       String?
+  /// Anonymous guest session, so a phone can see its own order after refresh.
+  sessionId     String?
+  code          String
+  channel       OrderChannel  @default(QR)
+  stage         OrderStage    @default(PLACED)
+  paymentStatus PaymentStatus @default(UNPAID)
+  /// Covers — asked at checkout, used for spend-per-head.
+  guests        Int           @default(1)
+  customerName  String?
+  customerPhone String?
+  /// Only set on delivery orders — where the restaurant's own rider is going.
+  customerAddress String?     @db.VarChar(300)
+  /// A landmark or flat number the rider will actually need.
+  addressNote     String?     @db.VarChar(160)
+  occasion      String?
+  note          String?       @db.Text
+  subtotalPaise Int           @default(0)
+  taxPaise      Int           @default(0)
+  discountPaise Int           @default(0)
+  totalPaise    Int           @default(0)
+  takenById     String?
+  placedAt      DateTime      @default(now())
+  readyAt       DateTime?
+  servedAt      DateTime?
+  updatedAt     DateTime      @updatedAt
+
+  restaurant    Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  table         RestaurantTable? @relation(fields: [tableId], references: [id])
+  takenBy       User?            @relation("OrderTakenBy", fields: [takenById], references: [id])
+  items         OrderItem[]
+
+  @@unique([restaurantId, code])
+  @@index([restaurantId, placedAt])
+  @@index([restaurantId, stage])
+  @@index([tableId, stage])
+}
+
+model OrderItem {
+  id            String @id @default(cuid())
+  orderId       String
+  menuItemId    String
+  /// Names and prices are copied in, so history survives menu edits.
+  nameSnapshot  String
+  unitPricePaise Int
+  costPaise     Int    @default(0)
+  qty           Int    @default(1)
+  optionLabels  Json?
+  note          String?
+
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem      MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@index([orderId])
+  @@index([menuItemId])
+}
+
+// ------------------------------------------------------ Offers & stock
+
+enum OfferKind {
+  PERCENT
+  FLAT
+}
+
+/// A slide at the top of the guest menu — a poster for an offer, a new dish,
+/// or a festival. Either an image, a line of text, or both.
+model Banner {
+  id           String   @id @default(cuid())
+  restaurantId String
+  imageUrl     String?
+  headline     String?  @db.VarChar(80)
+  subtext      String?  @db.VarChar(140)
+  /// Optional promo code the slide is advertising, shown as a chip.
+  code         String?  @db.VarChar(24)
+  isActive     Boolean  @default(true)
+  /// Low numbers slide past first.
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, isActive, sortOrder])
+}
+
+model Offer {
+  id           String    @id @default(cuid())
+  restaurantId String
+  code         String
+  kind         OfferKind @default(PERCENT)
+  value        Int
+  minSpendPaise Int      @default(0)
+  startsAt     DateTime?
+  endsAt       DateTime?
+  isActive     Boolean   @default(true)
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, code])
+  @@index([restaurantId, isActive])
+}
+
+model InventoryItem {
+  id           String   @id @default(cuid())
+  restaurantId String
+  name         String
+  unit         String   @default("kg")
+  quantity     Float    @default(0)
+  lowAt        Float    @default(0)
+  updatedAt    DateTime @updatedAt
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId])
+}
+
+// ------------------------------------------------------------- Support
+
+enum TicketStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model SupportTicket {
+  id           String         @id @default(cuid())
+  restaurantId String
+  openedById   String
+  subject      String
+  category     String         @default("general")
+  status       TicketStatus   @default(OPEN)
+  priority     TicketPriority @default(NORMAL)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  /// Set when the platform replies, so first-response time is measurable.
+  firstReplyAt DateTime?
+  closedAt     DateTime?
+
+  restaurant   Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  openedBy     User             @relation("TicketOpenedBy", fields: [openedById], references: [id])
+  messages     SupportMessage[]
+
+  @@index([restaurantId, status])
+  @@index([status, priority])
+  @@index([updatedAt])
+}
+
+model SupportMessage {
+  id        String   @id @default(cuid())
+  ticketId  String
+  authorId  String
+  body      String   @db.Text
+  /// True when written from the super admin console.
+  fromStaff Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  ticket    SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author    User          @relation("MessageAuthor", fields: [authorId], references: [id])
+
+  @@index([ticketId, createdAt])
+}
+
+// ------------------------------------------------------- Payment settings
+
+/// Where restaurants send their subscription payments. One row, edited by
+/// the super admin — mirrors how the storefront reference handles UPI.
+model PaymentSettings {
+  id          String   @id @default("platform")
+  upiId       String   @default("")
+  payeeName   String   @default("")
+  qrUrl       String?
+  /// MySQL cannot default a TEXT column, so this is a bounded varchar.
+  note        String   @default("Scan the QR with any UPI app, pay the exact amount, then upload the screenshot.") @db.VarChar(500)
+  updatedAt   DateTime @updatedAt
+}
+
+/// A guest pressing "call a server". Written from the guest app, cleared by
+/// whoever attends the table — this is what makes the button do something.
+model WaiterCall {
+  id               String    @id @default(cuid())
+  restaurantId     String
+  tableId          String
+  reason           String    @default("assistance")
+  sessionId        String?
+  note             String?
+  createdAt        DateTime  @default(now())
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
+
+  restaurant       Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  table            RestaurantTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  acknowledgedBy   User?           @relation("CallAttendedBy", fields: [acknowledgedById], references: [id])
+
+  @@index([restaurantId, acknowledgedAt])
+  @@index([tableId, createdAt])
+}
